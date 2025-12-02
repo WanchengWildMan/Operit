@@ -6,6 +6,7 @@ import com.ai.assistance.operit.data.model.ModelOption
 import com.ai.assistance.operit.data.model.ModelParameter
 import com.ai.assistance.operit.data.model.ToolPrompt
 import com.ai.assistance.operit.util.ChatUtils
+import com.ai.assistance.operit.util.StreamingJsonXmlConverter
 import com.ai.assistance.operit.util.TokenCacheManager
 import com.ai.assistance.operit.util.exceptions.UserCancellationException
 import com.ai.assistance.operit.util.stream.Stream
@@ -22,7 +23,45 @@ import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONArray
 import org.json.JSONObject
 
-/** OpenAI API格式的实现，支持标准OpenAI接口和兼容此格式的其他提供商 */
+/**
+ * OpenAI API格式的实现，支持标准OpenAI接口和兼容此格式的其他提供商
+ * 
+ * ## enableToolCall 参数说明
+ * 
+ * `enableToolCall` 用于启用/禁用 OpenAI Tool Call API 原生格式。
+ * 
+ * ### 工作原理
+ * 
+ * 当 `enableToolCall = true` 时，本Provider会执行双向格式转换：
+ * 
+ * 1. **发送请求前**：将内部XML格式的工具调用转换为OpenAI Tool Call格式
+ *    - `<tool name="xxx"><param name="yyy">value</param></tool>` 
+ *    - → `{"tool_calls": [{"function": {"name": "xxx", "arguments": "{\"yyy\": \"value\"}"}}]}`
+ * 
+ * 2. **接收响应后**：将API返回的Tool Call格式转换回XML格式
+ *    - API返回的tool_calls对象 → XML格式
+ *    - 保持上层代码对XML格式的兼容性
+ * 
+ * ### 历史记录处理
+ * 
+ * - **Assistant消息**：XML工具调用 → OpenAI `tool_calls` 字段
+ * - **User消息**：XML `tool_result` → OpenAI `role: "tool"` 消息
+ * - **tool_call_id追踪**：自动生成和匹配ID，确保工具调用与结果正确关联
+ * 
+ * ### 适用场景
+ * 
+ * - 使用支持原生Tool Call API的模型（GPT-4、Claude、Qwen等）
+ * - 需要更结构化的工具调用处理
+ * - 希望利用模型的自动工具选择功能
+ * 
+ * ### 注意事项
+ * 
+ * - 默认值为 `false`，需要显式启用
+ * - 启用后会自动添加 `tools` 和 `tool_choice` 到请求体
+ * - 流式响应中也支持增量工具调用数据的处理
+ * 
+ * @param enableToolCall 是否启用Tool Call API格式转换（默认false）
+ */
 open class OpenAIProvider(
     private val apiEndpoint: String,
     private val apiKeyProvider: ApiKeyProvider,
@@ -606,153 +645,21 @@ open class OpenAIProvider(
     private fun String.isNotNullOrEmpty() = this.isNotEmpty() && this != "null"
     
     /**
-     * 增量式 JSON 解析器，用于流式处理 Tool Call 参数
-     * 能够接受 JSON 片段流，并产生参数解析事件
-     */
-    private class StreamingJsonParser {
-        private enum class State {
-            WAIT_BRACE,      // 等待起始 {
-            WAIT_KEY_QUOTE,  // 等待 Key 的起始 "
-            READ_KEY,        // 读取 Key 内容
-            WAIT_COLON,      // 等待 :
-            WAIT_VALUE,      // 等待 Value
-            READ_STRING,     // 读取 String Value
-            READ_PRIMITIVE,  // 读取 Primitive Value
-            ESCAPE,          // 转义字符处理
-            UNICODE_ESCAPE,  // Unicode 转义
-            WAIT_COMMA       // 等待 , 或 }
-        }
-
-        private var state = State.WAIT_BRACE
-        private val buffer = StringBuilder()
-        private var unicodeCount = 0
-        
-        sealed class Event {
-            data class ParamStart(val name: String) : Event()
-            data class ParamValue(val text: String) : Event()
-            object ParamEnd : Event()
-        }
-
-        fun feed(chunk: String): List<Event> {
-            val events = mutableListOf<Event>()
-            
-            for (c in chunk) {
-                when (state) {
-                    State.WAIT_BRACE -> if (c == '{') state = State.WAIT_KEY_QUOTE
-                    State.WAIT_KEY_QUOTE -> {
-                        if (c == '"') {
-                            state = State.READ_KEY
-                            buffer.setLength(0)
-                        } else if (c == '}') {
-                            // 对象结束
-                        }
-                    }
-                    State.READ_KEY -> {
-                        if (c == '"') {
-                            events.add(Event.ParamStart(buffer.toString()))
-                            state = State.WAIT_COLON
-                        } else {
-                            if (c != '\\') buffer.append(c)
-                        }
-                    }
-                    State.WAIT_COLON -> if (c == ':') state = State.WAIT_VALUE
-                    State.WAIT_VALUE -> {
-                        if (!c.isWhitespace()) {
-                            if (c == '"') {
-                                state = State.READ_STRING
-                            } else {
-                                state = State.READ_PRIMITIVE
-                                buffer.setLength(0)
-                                buffer.append(c)
-                            }
-                        }
-                    }
-                    State.READ_STRING -> {
-                        if (c == '"') {
-                            state = State.WAIT_COMMA
-                            events.add(Event.ParamEnd)
-                        } else if (c == '\\') {
-                            state = State.ESCAPE
-                        } else {
-                            events.add(Event.ParamValue(c.toString()))
-                        }
-                    }
-                    State.ESCAPE -> {
-                        if (c == 'u') {
-                            state = State.UNICODE_ESCAPE
-                            unicodeCount = 0
-                            buffer.setLength(0)
-                        } else {
-                            val unescaped = when (c) {
-                                'n' -> "\n"
-                                'r' -> "\r"
-                                't' -> "\t"
-                                'b' -> "\b"
-                                'f' -> "\u000c"
-                                '\"' -> "\""
-                                '\\' -> "\\"
-                                '/' -> "/"
-                                else -> c.toString()
-                            }
-                            events.add(Event.ParamValue(unescaped))
-                            state = State.READ_STRING
-                        }
-                    }
-                    State.UNICODE_ESCAPE -> {
-                        buffer.append(c)
-                        unicodeCount++
-                        if (unicodeCount == 4) {
-                            try {
-                                val code = buffer.toString().toInt(16)
-                                events.add(Event.ParamValue(code.toChar().toString()))
-                            } catch (_: Exception) { }
-                            state = State.READ_STRING
-                        }
-                    }
-                    State.READ_PRIMITIVE -> {
-                        if (c == ',' || c == '}' || c.isWhitespace()) {
-                            events.add(Event.ParamValue(buffer.toString()))
-                            events.add(Event.ParamEnd)
-                            if (c == ',') state = State.WAIT_KEY_QUOTE
-                            else if (c == '}') state = State.WAIT_BRACE
-                            else state = State.WAIT_COMMA
-                        } else {
-                            buffer.append(c)
-                        }
-                    }
-                    State.WAIT_COMMA -> {
-                        if (c == ',') state = State.WAIT_KEY_QUOTE
-                        else if (c == '}') state = State.WAIT_BRACE
-                    }
-                }
-            }
-            return events
-        }
-        
-        fun flush(): List<Event> {
-            val events = mutableListOf<Event>()
-            if (state == State.READ_PRIMITIVE && buffer.isNotEmpty()) {
-                events.add(Event.ParamValue(buffer.toString()))
-                events.add(Event.ParamEnd)
-            }
-            return events
-        }
-    }
-    
-    /**
      * Tool Call流式输出状态管理
      */
     private data class ToolCallState(
         val emitted: MutableMap<Int, Boolean> = mutableMapOf(),
         val nameEmitted: MutableMap<Int, Boolean> = mutableMapOf(),
-        val parser: MutableMap<Int, StreamingJsonParser> = mutableMapOf()
+        val parser: MutableMap<Int, StreamingJsonXmlConverter> = mutableMapOf(),
+        val closed: MutableMap<Int, Boolean> = mutableMapOf()
     ) {
-        fun getParser(index: Int) = parser.getOrPut(index) { StreamingJsonParser() }
+        fun getParser(index: Int) = parser.getOrPut(index) { StreamingJsonXmlConverter() }
         
         fun clear() {
             emitted.clear()
             nameEmitted.clear()
             parser.clear()
+            closed.clear()
         }
     }
     
@@ -797,14 +704,13 @@ open class OpenAIProvider(
         }
         
         /**
-         * 处理 StreamingJsonParser 事件，转换为 XML 输出
+         * 处理 StreamingJsonXmlConverter 事件，转换为 XML 输出
          */
-        suspend fun handleJsonEvents(events: List<StreamingJsonParser.Event>) {
+        suspend fun handleJsonEvents(events: List<StreamingJsonXmlConverter.Event>) {
             events.forEach { event ->
                 when (event) {
-                    is StreamingJsonParser.Event.ParamStart -> emitTag("\n  <param name=\"${event.name}\">")
-                    is StreamingJsonParser.Event.ParamValue -> emitContent(escapeXml(event.text))
-                    is StreamingJsonParser.Event.ParamEnd -> emitTag("</param>")
+                    is StreamingJsonXmlConverter.Event.Tag -> emitTag(event.text)
+                    is StreamingJsonXmlConverter.Event.Content -> emitContent(event.text)
                 }
             }
         }
@@ -1081,6 +987,8 @@ open class OpenAIProvider(
                         val accumulatedToolCalls = mutableMapOf<Int, JSONObject>()
                         // 追踪每个tool call的流式输出状态
                         val toolCallState = ToolCallState()
+                        // 追踪上一个处理的工具index，用于检测工具切换
+                        var lastProcessedToolIndex: Int? = null
                         // 流式内容发送器
                         val emitter = StreamEmitter(receivedContent, ::emit, onTokensUpdated)
 
@@ -1126,6 +1034,20 @@ open class OpenAIProvider(
                                                                 val index = deltaCall.optInt("index", -1)
                                                                 if (index < 0) continue
                                                                 
+                                                                // 检测工具切换：如果index变化了，说明前一个工具已完成
+                                                                if (lastProcessedToolIndex != null && lastProcessedToolIndex != index) {
+                                                                    val prevIndex = lastProcessedToolIndex!!
+                                                                    // 输出前一个工具的结束标签
+                                                                    if (toolCallState.closed[prevIndex] != true && toolCallState.nameEmitted[prevIndex] == true) {
+                                                                        val events = toolCallState.getParser(prevIndex).flush()
+                                                                        emitter.handleJsonEvents(events)
+                                                                        emitter.emitTag("\n</tool>")
+                                                                        toolCallState.closed[prevIndex] = true
+                                                                        Log.d("AIService", "检测到工具切换，关闭前一个工具 index=$prevIndex")
+                                                                    }
+                                                                }
+                                                                lastProcessedToolIndex = index
+                                                                
                                                                 // 获取或创建该index的累积对象
                                                                 val accumulated = accumulatedToolCalls.getOrPut(index) {
                                                                     createToolCallAccumulator(index)
@@ -1170,30 +1092,28 @@ open class OpenAIProvider(
                                                             }
                                                         }
                                                         
-                                                        // 检查finish_reason，如果是tool_calls，输出参数和工具的结束标签
+                                                        // 检查finish_reason，如果是tool_calls，输出最后一个工具的结束标签
                                                         val finishReason = choice.optString("finish_reason", "")
-                                                        if (finishReason == "tool_calls" && accumulatedToolCalls.isNotEmpty()) {
-                                                            // 按index排序，输出每个tool call的结束标签
-                                                            accumulatedToolCalls.values.sortedBy { it.getInt("index") }.forEach { toolCall ->
-                                                                val index = toolCall.getInt("index")
-                                                                val function = toolCall.getJSONObject("function")
-                                                                val toolName = function.getString("name")
-                                                                val argsJson = function.optString("arguments", "{}")
-                                                                
+                                                        if (finishReason == "tool_calls" && lastProcessedToolIndex != null) {
+                                                            val index = lastProcessedToolIndex!!
+                                                            
+                                                            // 输出最后一个工具的结束标签（如果还没关闭）
+                                                            if (toolCallState.closed[index] != true && toolCallState.nameEmitted[index] == true) {
                                                                 // 最后一次尝试输出任何遗漏的参数增量
                                                                 val events = toolCallState.getParser(index).flush()
                                                                 emitter.handleJsonEvents(events)
                                                                 
                                                                 // 输出工具结束标签
                                                                 emitter.emitTag("\n</tool>")
-                                                                Log.d("AIService", "Tool Call流式完成: $toolName")
+                                                                toolCallState.closed[index] = true
+                                                                Log.d("AIService", "Tool Call流式完成（最后一个工具 index=$index）")
                                                             }
                                                             
                                                             onTokensUpdated(tokenCacheManager.totalInputTokenCount, tokenCacheManager.cachedInputTokenCount, tokenCacheManager.outputTokenCount)
                                                             
                                                             // 清空累积器
                                                             accumulatedToolCalls.clear()
-                                                            toolCallState.clear()
+                                                            lastProcessedToolIndex = null
                                                         }
                                                         
                                                         // 检查是否有思考内容

@@ -6,6 +6,7 @@ import com.ai.assistance.operit.data.model.ModelOption
 import com.ai.assistance.operit.data.model.ModelParameter
 import com.ai.assistance.operit.data.model.ToolPrompt
 import com.ai.assistance.operit.util.ChatUtils
+import com.ai.assistance.operit.util.StreamingJsonXmlConverter
 import com.ai.assistance.operit.util.TokenCacheManager
 import com.ai.assistance.operit.util.exceptions.UserCancellationException
 import com.ai.assistance.operit.util.stream.Stream
@@ -27,7 +28,8 @@ class ClaudeProvider(
     private val modelName: String,
     private val client: OkHttpClient,
     private val customHeaders: Map<String, String> = emptyMap(),
-    private val providerType: ApiProviderType = ApiProviderType.ANTHROPIC
+    private val providerType: ApiProviderType = ApiProviderType.ANTHROPIC,
+    private val enableToolCall: Boolean = false // 是否启用Tool Call接口（预留，Claude有原生tool支持）
 ) : AIService {
     // private val client: OkHttpClient = HttpClientFactory.instance
 
@@ -75,6 +77,177 @@ class ClaudeProvider(
         activeCall = null
     }
 
+    // ==================== Tool Call 支持 ====================
+    
+    /**
+     * XML转义/反转义工具
+     */
+    private object XmlEscaper {
+        fun escape(text: String): String {
+            return text.replace("&", "&amp;")
+                    .replace("<", "&lt;")
+                    .replace(">", "&gt;")
+                    .replace("\"", "&quot;")
+                    .replace("'", "&apos;")
+        }
+        
+        fun unescape(text: String): String {
+            return text.replace("&lt;", "<")
+                    .replace("&gt;", ">")
+                    .replace("&quot;", "\"")
+                    .replace("&apos;", "'")
+                    .replace("&amp;", "&")
+        }
+    }
+    
+    /**
+     * 解析XML格式的tool调用，转换为Claude Tool格式
+     * @return Pair<文本内容, tool_use数组>
+     */
+    private fun parseXmlToolCalls(content: String): Pair<String, JSONArray?> {
+        if (!enableToolCall) return Pair(content, null)
+        
+        val toolPattern = Regex("<tool\\s+name=\"([^\"]+)\">([\\s\\S]*?)</tool>", RegexOption.MULTILINE)
+        val matches = toolPattern.findAll(content)
+        
+        if (!matches.any()) {
+            return Pair(content, null)
+        }
+        
+        val toolUses = JSONArray()
+        var textContent = content
+        var callIndex = 0
+        
+        matches.forEach { match ->
+            val toolName = match.groupValues[1]
+            val toolBody = match.groupValues[2]
+            
+            // 解析参数
+            val paramPattern = Regex("<param\\s+name=\"([^\"]+)\">([\\s\\S]*?)</param>")
+            val input = JSONObject()
+            
+            paramPattern.findAll(toolBody).forEach { paramMatch ->
+                val paramName = paramMatch.groupValues[1]
+                val paramValue = XmlEscaper.unescape(paramMatch.groupValues[2].trim())
+                input.put(paramName, paramValue)
+            }
+            
+            // 构建tool_use对象（Claude格式）
+            val callId = "toolu_${toolName}_${input.toString().hashCode().toString(16)}_$callIndex"
+            toolUses.put(JSONObject().apply {
+                put("type", "tool_use")
+                put("id", callId)
+                put("name", toolName)
+                put("input", input)
+            })
+            
+            callIndex++
+            Log.d("AIService", "XML→ClaudeToolUse: $toolName -> ID: $callId")
+            
+            // 从文本内容中移除tool标签
+            textContent = textContent.replace(match.value, "")
+        }
+        
+        return Pair(textContent.trim(), toolUses)
+    }
+    
+    /**
+     * 解析XML格式的tool_result，转换为Claude Tool Result格式
+     * @return Pair<文本内容, tool_result数组>
+     */
+    private fun parseXmlToolResults(content: String): Pair<String, List<Pair<String, String>>?> {
+        if (!enableToolCall) return Pair(content, null)
+        
+        val resultPattern = Regex("<tool_result[^>]*>([\\s\\S]*?)</tool_result>", RegexOption.MULTILINE)
+        val matches = resultPattern.findAll(content)
+        
+        if (!matches.any()) {
+            return Pair(content, null)
+        }
+        
+        val results = mutableListOf<Pair<String, String>>()
+        var textContent = content
+        var resultIndex = 0
+        
+        matches.forEach { match ->
+            val fullContent = match.groupValues[1].trim()
+            val contentPattern = Regex("<content>([\\s\\S]*?)</content>", RegexOption.MULTILINE)
+            val contentMatch = contentPattern.find(fullContent)
+            val resultContent = if (contentMatch != null) {
+                contentMatch.groupValues[1].trim()
+            } else {
+                fullContent
+            }
+            
+            results.add(Pair("toolu_result_${resultIndex}", resultContent))
+            textContent = textContent.replace(match.value, "").trim()
+            
+            Log.d("AIService", "解析Claude tool_result #$resultIndex, content length=${resultContent.length}")
+            resultIndex++
+        }
+        
+        return Pair(textContent.trim(), results)
+    }
+    
+    /**
+     * 从ToolPrompt列表构建Claude格式的Tool Definitions
+     */
+    private fun buildToolDefinitionsForClaude(toolPrompts: List<ToolPrompt>): JSONArray {
+        val tools = JSONArray()
+        
+        for (tool in toolPrompts) {
+            tools.put(JSONObject().apply {
+                put("name", tool.name)
+                // 组合description和details作为完整描述
+                val fullDescription = if (tool.details.isNotEmpty()) {
+                    "${tool.description}\n${tool.details}"
+                } else {
+                    tool.description
+                }
+                put("description", fullDescription)
+                
+                // 使用结构化参数构建input_schema
+                val inputSchema = buildSchemaFromStructured(tool.parametersStructured ?: emptyList())
+                put("input_schema", inputSchema)
+            })
+        }
+        
+        return tools
+    }
+    
+    /**
+     * 从结构化参数构建JSON Schema（Claude格式）
+     */
+    private fun buildSchemaFromStructured(params: List<com.ai.assistance.operit.data.model.ToolParameterSchema>): JSONObject {
+        val schema = JSONObject().apply {
+            put("type", "object")
+        }
+        
+        val properties = JSONObject()
+        val required = JSONArray()
+        
+        for (param in params) {
+            properties.put(param.name, JSONObject().apply {
+                put("type", param.type)
+                put("description", param.description)
+                if (param.default != null) {
+                    put("default", param.default)
+                }
+            })
+            
+            if (param.required) {
+                required.put(param.name)
+            }
+        }
+        
+        schema.put("properties", properties)
+        if (required.length() > 0) {
+            schema.put("required", required)
+        }
+        
+        return schema
+    }
+    
     /**
      * 构建包含文本和图片的content数组
      */
@@ -123,21 +296,32 @@ class ClaudeProvider(
             message: String,
             chatHistory: List<Pair<String, String>>
     ): Triple<JSONArray, String?, Int> {
-        var tokenCount = 0
         val messagesArray = JSONArray()
 
+        // 使用TokenCacheManager计算token数量
+        val tokenCount = tokenCacheManager.calculateInputTokens(message, chatHistory)
+
+        // 检查当前消息是否已经在历史记录的末尾（避免重复）
+        val isMessageInHistory = chatHistory.isNotEmpty() && chatHistory.last().second == message
+        
+        // 如果消息已在历史中，只处理历史；否则需要处理历史+当前消息
+        val effectiveHistory = if (isMessageInHistory) {
+            chatHistory
+        } else {
+            chatHistory + ("user" to message)
+        }
+
         // 提取系统消息
-        val systemMessages = chatHistory.filter { it.first.equals("system", ignoreCase = true) }
+        val systemMessages = effectiveHistory.filter { it.first.equals("system", ignoreCase = true) }
         var systemPrompt: String? = null
 
         if (systemMessages.isNotEmpty()) {
             systemPrompt = systemMessages.joinToString("\n\n") { it.second }
-            tokenCount += ChatUtils.estimateTokenCount(systemPrompt)
         }
 
         // 处理用户和助手消息
         val historyWithoutSystem =
-                ChatUtils.mapChatHistoryToStandardRoles(chatHistory).filter {
+                ChatUtils.mapChatHistoryToStandardRoles(effectiveHistory).filter {
                     it.first != "system"
                 }
         
@@ -152,39 +336,90 @@ class ClaudeProvider(
             }
         }
 
+        // 追踪上一个assistant消息中的tool_use ids，用于匹配tool结果
+        val lastToolUseIds = mutableListOf<String>()
+        
         // 添加历史消息
         for ((role, content) in mergedHistory) {
-            val messageObject = JSONObject()
             val claudeRole = if (role == "assistant") "assistant" else "user"
-            messageObject.put("role", claudeRole)
-            messageObject.put("content", buildContentArray(content))
-            messagesArray.put(messageObject)
-            tokenCount += ChatUtils.estimateTokenCount(content)
-        }
-
-        // 添加当前用户消息
-        val lastMessageIndex = messagesArray.length() - 1
-        val lastMessageRole =
-                if (lastMessageIndex >= 0) {
-                    messagesArray.getJSONObject(lastMessageIndex).getString("role")
-                } else null
-
-        if (lastMessageRole != "user") {
-            val userMessage = JSONObject().apply {
-                put("role", "user")
-                put("content", buildContentArray(message))
-            }
-            messagesArray.put(userMessage)
-            tokenCount += ChatUtils.estimateTokenCount(message)
-        } else {
-            // 如果消息为空，不触发拼接
-            if (message.isNotBlank()) {
-                val lastMessage = messagesArray.getJSONObject(lastMessageIndex)
-                val lastContentArray = lastMessage.getJSONArray("content")
-                val lastContentObject = lastContentArray.getJSONObject(lastContentArray.length() - 1)
-                val existingText = lastContentObject.optString("text", "")
-                lastContentObject.put("text", existingText + "\n" + message)
-                tokenCount += ChatUtils.estimateTokenCount(message)
+            
+            // 当启用Tool Call API时，转换XML格式的工具调用
+            if (enableToolCall) {
+                if (role == "assistant") {
+                    // 解析assistant消息中的XML tool calls
+                    val (textContent, toolUses) = parseXmlToolCalls(content)
+                    
+                    val contentArray = JSONArray()
+                    // 先添加文本内容
+                    if (textContent.isNotEmpty()) {
+                        contentArray.put(JSONObject().apply {
+                            put("type", "text")
+                            put("text", textContent)
+                        })
+                    }
+                    // 再添加tool_use
+                    if (toolUses != null && toolUses.length() > 0) {
+                        for (i in 0 until toolUses.length()) {
+                            contentArray.put(toolUses.getJSONObject(i))
+                        }
+                        // 记录这些tool_use ids供后续tool_result使用
+                        lastToolUseIds.clear()
+                        for (i in 0 until toolUses.length()) {
+                            lastToolUseIds.add(toolUses.getJSONObject(i).getString("id"))
+                        }
+                    }
+                    
+                    val messageObject = JSONObject()
+                    messageObject.put("role", claudeRole)
+                    messageObject.put("content", contentArray)
+                    messagesArray.put(messageObject)
+                } else if (role == "user") {
+                    // 解析user消息中的XML tool_result
+                    val (textContent, toolResults) = parseXmlToolResults(content)
+                    
+                    val contentArray = JSONArray()
+                    // 先添加tool_result
+                    if (toolResults != null && toolResults.isNotEmpty()) {
+                        toolResults.forEachIndexed { index, (_, resultContent) ->
+                            val toolUseId = if (index < lastToolUseIds.size) {
+                                lastToolUseIds[index]
+                            } else {
+                                "toolu_unknown_$index"
+                            }
+                            contentArray.put(JSONObject().apply {
+                                put("type", "tool_result")
+                                put("tool_use_id", toolUseId)
+                                put("content", resultContent)
+                            })
+                            Log.d("AIService", "历史XML→ClaudeToolResult: ID=$toolUseId, content length=${resultContent.length}")
+                        }
+                        lastToolUseIds.clear()
+                    }
+                    // 再添加文本内容
+                    if (textContent.isNotEmpty()) {
+                        contentArray.put(JSONObject().apply {
+                            put("type", "text")
+                            put("text", textContent)
+                        })
+                    }
+                    
+                    val messageObject = JSONObject()
+                    messageObject.put("role", claudeRole)
+                    messageObject.put("content", contentArray)
+                    messagesArray.put(messageObject)
+                } else {
+                    // system等其他角色正常处理
+                    val messageObject = JSONObject()
+                    messageObject.put("role", claudeRole)
+                    messageObject.put("content", buildContentArray(content))
+                    messagesArray.put(messageObject)
+                }
+            } else {
+                // 不启用Tool Call API时，保持原样
+                val messageObject = JSONObject()
+                messageObject.put("role", claudeRole)
+                messageObject.put("content", buildContentArray(content))
+                messagesArray.put(messageObject)
             }
         }
 
@@ -206,7 +441,8 @@ class ClaudeProvider(
             chatHistory: List<Pair<String, String>>,
             modelParameters: List<ModelParameter<*>> = emptyList(),
             enableThinking: Boolean,
-            stream: Boolean = true
+            stream: Boolean = true,
+            availableTools: List<ToolPrompt>? = null
     ): RequestBody {
         val jsonObject = JSONObject()
         jsonObject.put("model", modelName)
@@ -224,6 +460,15 @@ class ClaudeProvider(
         // Claude对系统消息的处理有所不同，它使用system参数
         if (systemPrompt != null) {
             jsonObject.put("system", systemPrompt)
+        }
+
+        // 添加 Tool Call 工具定义（如果启用且有可用工具）
+        if (enableToolCall && availableTools != null && availableTools.isNotEmpty()) {
+            val tools = buildToolDefinitionsForClaude(availableTools)
+            if (tools.length() > 0) {
+                jsonObject.put("tools", tools)
+                Log.d("AIService", "已添加 ${tools.length()} 个 Claude Tool Definitions")
+            }
         }
 
         // 添加extended thinking支持
@@ -366,7 +611,7 @@ class ClaudeProvider(
                     currentHistory = chatHistory
                 }
 
-                val requestBody = createRequestBody(currentMessage, currentHistory, modelParameters, enableThinking, stream)
+                val requestBody = createRequestBody(currentMessage, currentHistory, modelParameters, enableThinking, stream, availableTools)
                 onTokensUpdated(
                         tokenCacheManager.totalInputTokenCount,
                         tokenCacheManager.cachedInputTokenCount,
@@ -398,6 +643,10 @@ class ClaudeProvider(
                         // 处理流式响应
                         val reader = responseBody.charStream().buffered()
                         var wasCancelled = false
+                        
+                        // Tool call 流式输出支持
+                        var currentToolParser: StreamingJsonXmlConverter? = null
+                        var isInToolCall = false
 
                         try {
                             reader.useLines { lines ->
@@ -423,6 +672,73 @@ class ClaudeProvider(
                                             
                                             // 根据type处理不同的事件
                                             when (type) {
+                                                "content_block_start" -> {
+                                                    // 处理 tool_use 开始
+                                                    if (enableToolCall) {
+                                                        val contentBlock = jsonResponse.optJSONObject("content_block")
+                                                        if (contentBlock != null && contentBlock.optString("type") == "tool_use") {
+                                                            val toolName = contentBlock.optString("name", "")
+                                                            if (toolName.isNotEmpty()) {
+                                                                // 输出工具开始标签
+                                                                val toolStartTag = "\n<tool name=\"$toolName\">"
+                                                                emit(toolStartTag)
+                                                                receivedContent.append(toolStartTag)
+                                                                
+                                                                // 创建新的流式解析器
+                                                                currentToolParser = StreamingJsonXmlConverter()
+                                                                isInToolCall = true
+                                                                
+                                                                // 将整个 input JSON 字符串feed给解析器
+                                                                val input = contentBlock.optJSONObject("input")
+                                                                if (input != null) {
+                                                                    val inputJson = input.toString()
+                                                                    val events = currentToolParser!!.feed(inputJson)
+                                                                    events.forEach { event ->
+                                                                        when (event) {
+                                                                            is StreamingJsonXmlConverter.Event.Tag -> {
+                                                                                emit(event.text)
+                                                                                receivedContent.append(event.text)
+                                                                            }
+                                                                            is StreamingJsonXmlConverter.Event.Content -> {
+                                                                                emit(event.text)
+                                                                                receivedContent.append(event.text)
+                                                                            }
+                                                                        }
+                                                                    }
+                                                                }
+                                                                
+                                                                Log.d("AIService", "Claude Tool Use流式转XML: $toolName")
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                                "content_block_stop" -> {
+                                                    // 块停止 - 如果在 tool call 中，输出结束标签
+                                                    if (isInToolCall && currentToolParser != null) {
+                                                        // 刷新剩余内容
+                                                        val events = currentToolParser!!.flush()
+                                                        events.forEach { event ->
+                                                            when (event) {
+                                                                is StreamingJsonXmlConverter.Event.Tag -> {
+                                                                    emit(event.text)
+                                                                    receivedContent.append(event.text)
+                                                                }
+                                                                is StreamingJsonXmlConverter.Event.Content -> {
+                                                                    emit(event.text)
+                                                                    receivedContent.append(event.text)
+                                                                }
+                                                            }
+                                                        }
+                                                        
+                                                        // 输出工具结束标签
+                                                        val toolEndTag = "\n</tool>\n"
+                                                        emit(toolEndTag)
+                                                        receivedContent.append(toolEndTag)
+                                                        
+                                                        isInToolCall = false
+                                                        currentToolParser = null
+                                                    }
+                                                }
                                                 "content_block_delta" -> {
                                                     val delta = jsonResponse.optJSONObject("delta")
                                                     if (delta != null) {
@@ -483,10 +799,46 @@ class ClaudeProvider(
                                 val fullText = StringBuilder()
                                 for (i in 0 until content.length()) {
                                     val block = content.getJSONObject(i)
-                                    if (block.optString("type") == "text") {
-                                        val text = block.optString("text", "")
-                                        if (text.isNotEmpty()) {
-                                            fullText.append(text)
+                                    when (block.optString("type")) {
+                                        "text" -> {
+                                            val text = block.optString("text", "")
+                                            if (text.isNotEmpty()) {
+                                                fullText.append(text)
+                                            }
+                                        }
+                                        "tool_use" -> {
+                                            // 流式转换 tool_use 为 XML
+                                            if (enableToolCall) {
+                                                val toolName = block.optString("name", "")
+                                                if (toolName.isNotEmpty()) {
+                                                    fullText.append("\n<tool name=\"$toolName\">")
+                                                    
+                                                    // 使用 StreamingJsonXmlConverter 流式转换参数
+                                                    val input = block.optJSONObject("input")
+                                                    if (input != null) {
+                                                        val converter = StreamingJsonXmlConverter()
+                                                        val inputJson = input.toString()
+                                                        val events = converter.feed(inputJson)
+                                                        events.forEach { event ->
+                                                            when (event) {
+                                                                is StreamingJsonXmlConverter.Event.Tag -> fullText.append(event.text)
+                                                                is StreamingJsonXmlConverter.Event.Content -> fullText.append(event.text)
+                                                            }
+                                                        }
+                                                        // 刷新剩余内容
+                                                        val flushEvents = converter.flush()
+                                                        flushEvents.forEach { event ->
+                                                            when (event) {
+                                                                is StreamingJsonXmlConverter.Event.Tag -> fullText.append(event.text)
+                                                                is StreamingJsonXmlConverter.Event.Content -> fullText.append(event.text)
+                                                            }
+                                                        }
+                                                    }
+                                                    
+                                                    fullText.append("\n</tool>\n")
+                                                    Log.d("AIService", "Claude Tool Use流式转XML (非流式): $toolName")
+                                                }
+                                            }
                                         }
                                     }
                                 }

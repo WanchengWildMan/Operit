@@ -90,10 +90,10 @@ object AIServiceFactory {
             ApiProviderType.OPENAI -> OpenAIProvider(config.apiEndpoint, apiKeyProvider, config.modelName, httpClient, customHeaders, config.apiProviderType, supportsVision, enableToolCall)
 
             // Claude格式，支持Anthropic Claude系列
-            ApiProviderType.ANTHROPIC -> ClaudeProvider(config.apiEndpoint, apiKeyProvider, config.modelName, httpClient, customHeaders, config.apiProviderType)
+            ApiProviderType.ANTHROPIC -> ClaudeProvider(config.apiEndpoint, apiKeyProvider, config.modelName, httpClient, customHeaders, config.apiProviderType, enableToolCall)
 
             // Gemini格式，支持Google Gemini系列
-            ApiProviderType.GOOGLE -> GeminiProvider(config.apiEndpoint, apiKeyProvider, config.modelName, httpClient, customHeaders, config.apiProviderType, config.enableGoogleSearch)
+            ApiProviderType.GOOGLE -> GeminiProvider(config.apiEndpoint, apiKeyProvider, config.modelName, httpClient, customHeaders, config.apiProviderType, config.enableGoogleSearch, enableToolCall)
 
             // LM Studio使用OpenAI兼容格式
             ApiProviderType.LMSTUDIO -> OpenAIProvider(config.apiEndpoint, apiKeyProvider, config.modelName, httpClient, customHeaders, config.apiProviderType, supportsVision, enableToolCall)
@@ -104,7 +104,8 @@ object AIServiceFactory {
                 modelName = config.modelName,  // 使用modelName而不是mnnModelPath
                 forwardType = config.mnnForwardType,
                 threadCount = config.mnnThreadCount,
-                providerType = config.apiProviderType
+                providerType = config.apiProviderType,
+                enableToolCall = enableToolCall
             )
 
             // 阿里云（通义千问）使用专用的QwenProvider

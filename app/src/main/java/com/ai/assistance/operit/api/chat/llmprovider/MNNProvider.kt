@@ -27,7 +27,8 @@ class MNNProvider(
     private val modelName: String,  // 模型文件夹名称（如 "Qwen2-1.5B-Instruct-MNN"）
     private val forwardType: Int,
     private val threadCount: Int,
-    private val providerType: ApiProviderType = ApiProviderType.MNN
+    private val providerType: ApiProviderType = ApiProviderType.MNN,
+    private val enableToolCall: Boolean = false // 是否启用Tool Call接口（本地推理暂未实现）
 ) : AIService {
 
     companion object {
