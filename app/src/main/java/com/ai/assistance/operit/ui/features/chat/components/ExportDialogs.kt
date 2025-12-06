@@ -154,16 +154,26 @@ private fun PlatformButton(
 fun AndroidExportDialog(
         workDir: File,
         onDismiss: () -> Unit,
-        onExport: (packageName: String, appName: String, iconUri: Uri?) -> Unit
+        onExport: (
+                packageName: String,
+                appName: String,
+                iconUri: Uri?,
+                versionName: String,
+                versionCode: String
+        ) -> Unit
 ) {
     var packageName by rememberLocal(key = "export_package_name_${workDir.absolutePath}", "com.example.webproject")
     var appName by rememberLocal(key = "export_app_name_${workDir.absolutePath}", "Web Project")
+    var versionName by rememberLocal(key = "export_version_name_${workDir.absolutePath}", "1.0.0")
+    var versionCode by rememberLocal(key = "export_version_code_${workDir.absolutePath}", "1")
     var iconUri by rememberLocal<Uri?>(key = "export_icon_uri_${workDir.absolutePath}", null, serializer = UriSerializer)
+
+    var isPackageNameError by remember { mutableStateOf(false) }
+    var isVersionNameError by remember { mutableStateOf(false) }
 
     val context = LocalContext.current
     val imagePicker =
-            rememberLauncherForActivityResult(contract = ActivityResultContracts.GetContent()) { uri
-                ->
+            rememberLauncherForActivityResult(contract = ActivityResultContracts.GetContent()) { uri ->
                 iconUri = uri
             }
 
@@ -187,11 +197,37 @@ fun AndroidExportDialog(
 
                 OutlinedTextField(
                         value = packageName,
-                        onValueChange = { packageName = it },
-                        label = { Text(context.getString(R.string.package_name)) },
+                        onValueChange = { 
+                            // 只允许小写字母、数字和点号
+                            val filtered = it.filter { c -> c.isLowerCase() || c.isDigit() || c == '.' }
+                            
+                            // 验证包名格式
+                            val isValid = when {
+                                filtered.isEmpty() -> true  // 允许空输入
+                                filtered.startsWith(".") -> false  // 不能以点开头
+                                filtered.endsWith(".") -> false    // 不能以点结尾
+                                filtered.contains("..") -> false   // 不能有连续的点
+                                else -> {
+                                    // 检查每个段是否以字母开头
+                                    filtered.split('.').all { segment ->
+                                        segment.isNotEmpty() && segment[0].isLetter()
+                                    }
+                                }
+                            }
+                            
+                            isPackageNameError = !isValid && filtered.isNotEmpty()
+                            packageName = filtered
+                        },
+                        label = { Text(context.getString(R.string.package_name_label)) },
                         placeholder = { Text("com.example.webproject") },
                         modifier = Modifier.fillMaxWidth(),
-                        singleLine = true
+                        singleLine = true,
+                        isError = isPackageNameError,
+                        supportingText = { 
+                            if (isPackageNameError) {
+                                Text("格式不正确，应为 com.example.app")
+                            }
+                        }
                 )
 
                 Spacer(modifier = Modifier.height(12.dp))
@@ -199,7 +235,7 @@ fun AndroidExportDialog(
                 OutlinedTextField(
                         value = appName,
                         onValueChange = { appName = it },
-                        label = { Text(context.getString(R.string.app_name)) },
+                        label = { Text(context.getString(R.string.app_name_label)) },
                         placeholder = { Text("Web Project") },
                         modifier = Modifier.fillMaxWidth(),
                         singleLine = true
@@ -281,6 +317,40 @@ fun AndroidExportDialog(
                     )
                 }
 
+                Spacer(modifier = Modifier.height(16.dp))
+
+                OutlinedTextField(
+                        value = versionName,
+                        onValueChange = { 
+                            val newValue = it.filter { c -> c.isDigit() || c == '.' || c == '-' }
+                            // 简单的版本号格式验证，例如 1.0.0 或 1.0.0-beta
+                            val regex = "^\\d+(\\.\\d+){0,2}(-[a-zA-Z0-9]+)?$".toRegex()
+                            isVersionNameError = !regex.matches(newValue) && newValue.isNotEmpty()
+                            versionName = newValue
+                        },
+                        label = { Text(context.getString(R.string.version_name)) },
+                        placeholder = { Text("1.0.0") },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true,
+                        isError = isVersionNameError,
+                        supportingText = {
+                            if (isVersionNameError) {
+                                Text("格式不正确，应为 1.0.0")
+                            }
+                        }
+                )
+
+                Spacer(modifier = Modifier.height(12.dp))
+
+                OutlinedTextField(
+                        value = versionCode,
+                        onValueChange = { versionCode = it.filter { c -> c.isDigit() } },
+                        label = { Text(context.getString(R.string.version_code)) },
+                        placeholder = { Text("1") },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true
+                )
+
                 Spacer(modifier = Modifier.height(20.dp))
 
                 // 按钮区域
@@ -290,8 +360,8 @@ fun AndroidExportDialog(
                     Spacer(modifier = Modifier.width(8.dp))
 
                     Button(
-                            onClick = { onExport(packageName, appName, iconUri) },
-                            enabled = packageName.isNotEmpty() && appName.isNotEmpty()
+                            onClick = { onExport(packageName, appName, iconUri, versionName, versionCode) },
+                            enabled = packageName.isNotEmpty() && !isPackageNameError && appName.isNotEmpty() && versionName.isNotEmpty() && !isVersionNameError && versionCode.isNotEmpty()
                     ) { Text(context.getString(R.string.export)) }
                 }
             }
@@ -578,6 +648,8 @@ suspend fun exportAndroidApp(
         context: Context,
         packageName: String,
         appName: String,
+        versionName: String,
+        versionCode: String,
         iconUri: Uri?,
         webContentDir: File,
         onProgress: (Float, String) -> Unit,
@@ -598,6 +670,8 @@ suspend fun exportAndroidApp(
             onProgress(0.3f, "修改应用信息...")
             apkEditor.changePackageName(packageName)
             apkEditor.changeAppName(appName)
+            apkEditor.changeVersionName(versionName)
+            apkEditor.changeVersionCode(versionCode)
 
             // 4. 更改图标（如果提供）
             if (iconUri != null) {

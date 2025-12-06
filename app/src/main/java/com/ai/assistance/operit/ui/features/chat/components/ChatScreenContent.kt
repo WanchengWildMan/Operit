@@ -629,7 +629,7 @@ fun ChatScreenContent(
             AndroidExportDialog(
                     workDir = webContentDir!!,
                     onDismiss = { showAndroidExportDialog = false },
-                    onExport = { packageName, appName, iconUri ->
+                    onExport = { packageName, appName, iconUri, versionName, versionCode ->
                         showAndroidExportDialog = false
                         showExportProgressDialog = true
                         exportProgress = 0f
@@ -641,6 +641,8 @@ fun ChatScreenContent(
                                     context = context,
                                     packageName = packageName,
                                     appName = appName,
+                                    versionName = versionName,
+                                    versionCode = versionCode,
                                     iconUri = iconUri,
                                     webContentDir = webContentDir!!,
                                     onProgress = { progress, status ->

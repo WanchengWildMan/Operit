@@ -476,6 +476,7 @@
     <string name="show_help">显示帮助</string>
     <string name="hide_help">隐藏帮助</string>
     <string name="request_permission">请求Shizuku权限</string>
+    <string name="screen_title_html_packager">HTML Packager</string>
     <string name="execute_shell">执行shell命令</string>
     <string name="enter_command">输入ADB命令</string>
     <string name="show_samples">显示示例命令</string>
@@ -1247,7 +1248,7 @@
     <string name="ui_debug_tool">UI调试工具</string>
     <string name="ui_debug_description">点击右下角的按钮启动悬浮窗进行UI调试</string>
     <string name="current_interface_analysis">当前分析界面</string>
-    <string name="package_name">包名: %1$s</string>
+    <string name="package_name">包名</string>
     <string name="page_nodes">%1$s - 页面节点</string>
     <string name="no_page_nodes_found">没有找到页面节点</string>
     <string name="type_info">类型: %1$s</string>
@@ -1380,6 +1381,9 @@
     <string name="tool_log_viewer_desc">实时捕获并查看系统和应用日志，支持过滤和搜索</string>
     <string name="tool_process_limit_remover">解除幻象进程限制</string>
     <string name="tool_process_limit_remover_desc">管理Android 12+的幻象进程数量限制，允许更多后台子进程</string>
+
+    <string name="tool_html_packager">HTML打包器</string>
+    <string name="tool_html_packager_desc">将HTML文件及其依赖打包成单个HTML文件，方便分享和部署</string>
     
     <!-- Process Limit Remover Screen -->
     <string name="process_limit_title">解除幻象进程限制</string>
@@ -3251,6 +3255,9 @@
     <string name="configure_windows_app">配置Windows应用</string>
     <string name="package_name_label">包名</string>
     <string name="app_name_label">应用名称</string>
+
+    <string name="version_name">版本名称</string>
+    <string name="version_code">版本号</string>
     <string name="app_icon">应用图标:</string>
     <string name="click_select_icon">点击选择图标</string>
     <string name="exporting">导出中</string>

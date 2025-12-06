@@ -840,7 +840,7 @@ val actualViewModel: ChatViewModel = viewModel ?: viewModel { ChatViewModel(cont
             AndroidExportDialog(
                     workDir = webContentDir!!,
                     onDismiss = { showAndroidExportDialog = false },
-                    onExport = { packageName, appName, iconUri ->
+                    onExport = { packageName, appName, iconUri, versionName, versionCode ->
                         showAndroidExportDialog = false
                         showExportProgressDialog = true
                         exportProgress = 0f
@@ -852,6 +852,8 @@ val actualViewModel: ChatViewModel = viewModel ?: viewModel { ChatViewModel(cont
                                     context = context,
                                     packageName = packageName,
                                     appName = appName,
+                                    versionName = versionName,
+                                    versionCode = versionCode,
                                     iconUri = iconUri,
                                     webContentDir = webContentDir!!,
                                     onProgress = { progress, status ->

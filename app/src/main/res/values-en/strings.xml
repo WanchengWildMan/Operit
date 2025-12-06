@@ -1207,7 +1207,7 @@
     <string name="ui_debug_tool">UI Debug Tool</string>
     <string name="ui_debug_description">Click the button in the bottom right corner to launch floating window for UI debugging</string>
     <string name="current_interface_analysis">Current Interface Analysis</string>
-    <string name="package_name">Package Name: %1$s</string>
+    <string name="package_name">Package Name</string>
     <string name="page_nodes">%1$s - Page Nodes</string>
     <string name="no_page_nodes_found">No page nodes found</string>
     <string name="type_info">Type: %1$s</string>
@@ -1328,6 +1328,9 @@
     <string name="tool_log_viewer_desc">Real-time capture and view system and application logs with filtering and search support</string>
     <string name="tool_process_limit_remover">Phantom Process Limit Remover</string>
     <string name="tool_process_limit_remover_desc">Manage Android 12+ phantom process count limits to allow more background child processes</string>
+
+    <string name="tool_html_packager">HTML Packager</string>
+    <string name="tool_html_packager_desc">Package HTML files and their dependencies into a single file</string>
     
     <!-- Process Limit Remover Screen -->
     <string name="process_limit_title">Phantom Process Limit Remover</string>
@@ -3243,6 +3246,8 @@
     <string name="configure_windows_app">Configure Windows App</string>
     <string name="package_name_label">Package Name</string>
     <string name="app_name_label">App Name</string>
+    <string name="version_name">Version Name</string>
+    <string name="version_code">Version Code</string>
     <string name="app_icon">App Icon:</string>
     <string name="click_select_icon">Click to select icon</string>
     <string name="exporting">Exporting</string>

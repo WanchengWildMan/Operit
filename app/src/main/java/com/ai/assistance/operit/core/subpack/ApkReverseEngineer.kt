@@ -345,6 +345,80 @@ class ApkReverseEngineer(private val context: Context) {
     }
 
     /** 修改应用名称 - 通过修改strings.xml资源文件 */
+    fun modifyVersion(extractedDir: File, newVersionName: String, newVersionCode: String): Boolean {
+        val manifestFile = File(extractedDir, ANDROID_MANIFEST)
+        if (!manifestFile.exists()) {
+            Log.e(TAG, "未找到AndroidManifest.xml文件")
+            return false
+        }
+
+        try {
+            val manifestBytes = FileInputStream(manifestFile).use { it.readBytes() }
+            val reader = AxmlReader(manifestBytes)
+            val axml = Axml()
+            reader.accept(axml)
+
+            var manifestNode: Axml.Node? = null
+            for (node in axml.firsts) {
+                if (node.name == "manifest") {
+                    manifestNode = node
+                    break
+                }
+            }
+
+            if (manifestNode == null) {
+                Log.e(TAG, "未在AndroidManifest.xml中找到manifest元素")
+                return false
+            }
+
+            val androidNs = manifestNode.attrs.find { it.name == "versionCode" }?.ns ?: "http://schemas.android.com/apk/res/android"
+
+            // 修改或添加versionName
+            var versionNameAttr = manifestNode.attrs.find { it.name == "versionName" && it.ns == androidNs }
+            if (versionNameAttr != null) {
+                versionNameAttr.value = newVersionName
+            } else {
+                versionNameAttr = Axml.Node.Attr().apply {
+                    name = "versionName"
+                    ns = androidNs
+                    resourceId = -1
+                    type = AxmlVisitor.TYPE_STRING
+                    value = newVersionName
+                }
+                manifestNode.attrs.add(versionNameAttr)
+            }
+
+            // 修改或添加versionCode
+            var versionCodeAttr = manifestNode.attrs.find { it.name == "versionCode" && it.ns == androidNs }
+            if (versionCodeAttr != null) {
+                versionCodeAttr.value = newVersionCode.toIntOrNull() ?: 1
+                versionCodeAttr.type = AxmlVisitor.TYPE_INT_HEX
+            } else {
+                versionCodeAttr = Axml.Node.Attr().apply {
+                    name = "versionCode"
+                    ns = androidNs
+                    resourceId = -1
+                    type = AxmlVisitor.TYPE_INT_HEX
+                    value = newVersionCode.toIntOrNull() ?: 1
+                }
+                manifestNode.attrs.add(versionCodeAttr)
+            }
+
+            val writer = AxmlWriter()
+            axml.accept(writer)
+            val modifiedBytes = writer.toByteArray()
+
+            FileOutputStream(manifestFile).use { it.write(modifiedBytes) }
+
+            Log.d(TAG, "成功修改版本为: $newVersionName ($newVersionCode)")
+            return true
+        } catch (e: Exception) {
+            Log.e(TAG, "修改版本信息时发生异常", e)
+            return false
+        }
+    }
+
+    /** 修改应用名称 - 通过修改strings.xml资源文件 */
     private fun modifyAppNameInStrings(extractedDir: File, newAppName: String): Boolean {
         try {
             // 查找values目录中的strings.xml

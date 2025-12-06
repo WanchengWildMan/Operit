@@ -79,6 +79,8 @@ private constructor(
     private var extractedDir: File? = null
     private var newPackageName: String? = null
     private var newAppName: String? = null
+    private var newVersionName: String? = null
+    private var newVersionCode: String? = null
     private var newIconBitmap: Bitmap? = null
 
     private var keyStoreFile: File? = null
@@ -120,6 +122,26 @@ private constructor(
      */
     fun changeAppName(appName: String): ApkEditor {
         this.newAppName = appName
+        return this
+    }
+
+    /**
+     * 修改版本名
+     * @param versionName 新版本名
+     * @return 当前APK编辑器实例
+     */
+    fun changeVersionName(versionName: String): ApkEditor {
+        this.newVersionName = versionName
+        return this
+    }
+
+    /**
+     * 修改版本号
+     * @param versionCode 新版本号
+     * @return 当前APK编辑器实例
+     */
+    fun changeVersionCode(versionCode: String): ApkEditor {
+        this.newVersionCode = versionCode
         return this
     }
 
@@ -319,6 +341,14 @@ private constructor(
             Log.d(TAG, "修改应用名称为: $newAppName")
             if (!apkReverseEngineer.modifyAppName(extractedDir!!, newAppName!!)) {
                 throw RuntimeException("修改应用名称失败")
+            }
+        }
+
+        // 修改版本名和版本号
+        if (newVersionName != null && newVersionCode != null) {
+            Log.d(TAG, "修改版本为: $newVersionName ($newVersionCode)")
+            if (!apkReverseEngineer.modifyVersion(extractedDir!!, newVersionName!!, newVersionCode!!)) {
+                throw RuntimeException("修改版本失败")
             }
         }
 
