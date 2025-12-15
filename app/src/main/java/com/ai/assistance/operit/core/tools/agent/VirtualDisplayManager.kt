@@ -2,15 +2,15 @@ package com.ai.assistance.operit.core.tools.agent
 
 import android.content.Context
 import android.graphics.Bitmap
-import android.graphics.PixelFormat
+import android.graphics. PixelFormat
 import android.hardware.display.DisplayManager
 import android.hardware.display.VirtualDisplay
 import android.media.Image
 import android.media.ImageReader
 import android.util.DisplayMetrics
-import android.view.WindowManager
+import android. view.WindowManager
 import android.view.Surface
-import com.ai.assistance.operit.util.AppLogger
+import com.ai.assistance.operit. util.AppLogger
 import java.io.File
 import java.io.FileOutputStream
 
@@ -24,16 +24,16 @@ class VirtualDisplayManager private constructor(private val context: Context) {
 
         fun getInstance(context: Context): VirtualDisplayManager {
             return instance ?: synchronized(this) {
-                instance ?: VirtualDisplayManager(context.applicationContext).also { instance = it }
+                instance ?: VirtualDisplayManager(context. applicationContext).also { instance = it }
             }
         }
     }
 
     private var virtualDisplay: VirtualDisplay? = null
     private var imageReader: ImageReader? = null
-    private var displayId: Int? = null
+    private var displayId: Int?  = null
 
-    fun ensureVirtualDisplay(): Int? {
+    fun ensureVirtualDisplay(): Int?  {
         if (virtualDisplay != null && displayId != null) {
             return displayId
         }
@@ -51,7 +51,7 @@ class VirtualDisplayManager private constructor(private val context: Context) {
         virtualDisplay = null
 
         try {
-            imageReader?.close()
+            imageReader?. close()
         } catch (e: Exception) {
             AppLogger.e(TAG, "Error closing ImageReader", e)
         }
@@ -67,7 +67,7 @@ class VirtualDisplayManager private constructor(private val context: Context) {
         val reader = imageReader ?: return false
         var image: Image? = null
         return try {
-            image = reader.acquireLatestImage() ?: return false
+            image = reader. acquireLatestImage() ?: return false
 
             val width = image.width
             val height = image.height
@@ -82,7 +82,7 @@ class VirtualDisplayManager private constructor(private val context: Context) {
             val bitmap = Bitmap.createBitmap(
                 width + rowPadding / pixelStride,
                 height,
-                Bitmap.Config.ARGB_8888
+                Bitmap.Config. ARGB_8888
             )
             bitmap.copyPixelsFromBuffer(buffer)
 
@@ -107,20 +107,19 @@ class VirtualDisplayManager private constructor(private val context: Context) {
     private fun createVirtualDisplay(): Int? {
         return try {
             val windowManager = context.getSystemService(Context.WINDOW_SERVICE) as WindowManager
-            val displayManager = context.getSystemService(Context.DISPLAY_SERVICE) as DisplayManager
+            val displayManager = context.getSystemService(Context. DISPLAY_SERVICE) as DisplayManager
 
             val metrics = DisplayMetrics()
             @Suppress("DEPRECATION")
             windowManager.defaultDisplay.getRealMetrics(metrics)
 
-            val statusBarHeight = getStatusBarHeight()
             val width = metrics.widthPixels
-            val height = (metrics.heightPixels - statusBarHeight).coerceAtLeast(1)
+            val height = metrics. heightPixels
             val densityDpi = metrics.densityDpi
 
             val reader = ImageReader.newInstance(width, height, PixelFormat.RGBA_8888, 2)
             imageReader = reader
-            val surface: Surface = reader.surface
+            val surface:  Surface = reader.surface
 
             val flags = DisplayManager.VIRTUAL_DISPLAY_FLAG_PUBLIC or
                     DisplayManager.VIRTUAL_DISPLAY_FLAG_PRESENTATION
@@ -136,10 +135,10 @@ class VirtualDisplayManager private constructor(private val context: Context) {
             virtualDisplay = vd
 
             val display = vd.display
-            val id = display?.displayId
+            val id = display?. displayId
             displayId = id
 
-            AppLogger.d(TAG, "Created virtual display id=$id, size=${width}x$height, density=$densityDpi")
+            AppLogger. d(TAG, "Created virtual display id=$id, size=${width}x$height, density=$densityDpi")
             id
         } catch (e: Exception) {
             AppLogger.e(TAG, "Failed to create virtual display", e)
