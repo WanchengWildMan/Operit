@@ -55,12 +55,12 @@ android {
             isShrinkResources = false
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
-                "proguard-rules.pro"
+                "proguard-rules. pro"
             )
-            signingConfig = signingConfigs.getByName("release")
+            signingConfig = signingConfigs. getByName("release")
         }
         debug {
-            signingConfig = signingConfigs.getByName("release")
+            signingConfig = signingConfigs. getByName("release")
         }
         create("nightly") {
             isMinifyEnabled = false
@@ -75,9 +75,9 @@ android {
     }
     
     applicationVariants.all {
-        if (buildType.name == "nightly") {
+        if (buildType. name == "nightly") {
             outputs.all {
-                val output = this as com.android.build.gradle. internal.api.BaseVariantOutputImpl
+                val output = this as com.android. build.gradle.internal.api. BaseVariantOutputImpl
                 output.outputFileName = "app-nightly.apk"
             }
         }
@@ -122,6 +122,9 @@ dependencies {
     // Desugaring
     coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.0.4")
     
+    // Material Components - 添加这个依赖来修复构建错误
+    implementation("com.google.android.material:material:1.11.0")
+    
     // 核心库 - 使用正确的别名
     implementation(libs.androidx.core.ktx)
     implementation(libs.lifecycle.runtime.ktx)
@@ -135,7 +138,5 @@ dependencies {
     implementation(libs.compose.material3)
     
     // 测试
-    testImplementation(libs.junit)
-    androidTestImplementation(libs.androidx.junit)
-    androidTestImplementation(libs.androidx.espresso.core)
-}
+    testImplement
+
