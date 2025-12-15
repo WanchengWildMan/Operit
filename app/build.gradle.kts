@@ -3,21 +3,21 @@ import java.util.Properties
 
 plugins {
     alias(libs.plugins. android.application)
-    alias(libs.plugins. kotlin.android)
-    alias(libs.plugins.kotlin.serialization)
+    alias(libs.plugins.kotlin.android)
+    alias(libs.plugins. kotlin.serialization)
     alias(libs.plugins.kotlin.kapt)
-    alias(libs.plugins.kotlin. parcelize)
+    alias(libs.plugins.kotlin.parcelize)
     id("io.objectbox")
 }
 
 val localProperties = Properties()
-val localPropertiesFile = rootProject. file("local.properties")
+val localPropertiesFile = rootProject.file("local. properties")
 if (localPropertiesFile.exists()) {
     localProperties.load(FileInputStream(localPropertiesFile))
 }
 
 android {
-    namespace = "com.ai. assistance.operit"
+    namespace = "com.ai.assistance.operit"
     compileSdk = 34
 
     signingConfigs {
@@ -55,12 +55,12 @@ android {
             isShrinkResources = false
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
-                "proguard-rules. pro"
+                "proguard-rules.pro"
             )
-            signingConfig = signingConfigs. getByName("release")
+            signingConfig = signingConfigs.getByName("release")
         }
         debug {
-            signingConfig = signingConfigs. getByName("release")
+            signingConfig = signingConfigs.getByName("release")
         }
         create("nightly") {
             isMinifyEnabled = false
@@ -115,22 +115,26 @@ android {
 }
 
 dependencies {
-    // 确保所有依赖都正确声明
-    implementation(project(": mnn"))
+    // 项目依赖
+    implementation(project(":mnn"))
     implementation(project(":dragonbones"))
     
+    // Desugaring
     coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.0.4")
     
-    // 其他依赖使用 libs 引用
+    // 核心库 - 使用正确的别名
     implementation(libs.androidx.core.ktx)
-    implementation(libs.androidx.lifecycle. runtime.ktx)
-    implementation(libs.androidx.activity.compose)
-    implementation(platform(libs.androidx.compose.bom))
-    implementation(libs.androidx. ui)
-    implementation(libs. androidx.ui.graphics)
-    implementation(libs.androidx.ui. tooling.preview)
-    implementation(libs.androidx.material3)
+    implementation(libs.lifecycle.runtime.ktx)
+    implementation(libs.activity.compose)
     
+    // Compose
+    implementation(platform(libs.compose.bom))
+    implementation(libs.compose.ui)
+    implementation(libs.compose.ui. graphics)
+    implementation(libs. compose.ui.tooling.preview)
+    implementation(libs.compose.material3)
+    
+    // 测试
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)
     androidTestImplementation(libs.androidx.espresso.core)
